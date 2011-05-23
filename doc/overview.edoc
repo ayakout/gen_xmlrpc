@@ -1,0 +1,455 @@
+Overview page
+
+@copyright 2011 generated at {@date} {@time}.
+@author Ali Yakout <ali.yakout@gmail.com>
+
+
+@doc 
+
+<p>XMLRPC/INETS LIBRARY</p>
+
+
+<h2><a name="contents">Contents</a></h2>
+
+<ol>
+  <li><a href="#intro">Introduction</a></li>
+  <li><a href="#motivation">Motivation</a></li>
+  <li><a href="#architecture">Architecture</a></li>
+  <li><a href="#usage">Usage</a>
+    <ol>
+      <li><a href="#config">Configuration</a></li>
+    </ol>
+  </li>
+  <li><a href="#install">Installation</a></li>
+  <li><a href="#issues">Known Issues</a>
+    <ol>
+      <li><a href="#performance">Performance Constraints</a></li>
+    </ol>
+  </li>
+  <li><a href="#todo">TODO</a></li>
+  <li><a href="#contrib">Contributors</a></li>
+</ol>
+
+
+<h2><a name="intro">Introduction</a></h2>
+
+<p>
+Protocol specification can be found in the <a href="http://www.xmlrpc.com/spec">XML-RPC Specification</a>
+</p>
+
+
+<h2><a name="motivation">Motivation</a></h2>
+
+<p>GEN XMLRPC was developed to provide a generic XMLRPC server with simple callback functions. The library provides 
+custom validation in addition to primitive data types validation.</p>
+
+
+<h2><a name="architecture">Architecture</a></h2>
+
+<p>The application behaviour gen_xmlrpc is built as an inets module. All inets features are available including authentication database, logging, connection limits... etc.</p>
+
+<p>A  gen_xmlrpc assumes all specific parts to be located in a callback module exporting a pre-defined set of functions. The relationship between the behaviour functions and the callback functions can be illustrated as follows:</p>
+
+<pre>
+       gen_xmlrpc module            Callback module
+       -----------------            ---------------
+       gen_xmlrpc:start_link -----> Module:init/1
+
+       gen_xmlrpc:call       -----> Module:request_specs/2
+                                    Module:handle_request/3
+
+       -                     -----> Module:terminate/2
+</pre>
+
+<p>The library maps XMLRPC types to Erlang primitive types, for not confusing a string with array or base64, the array is mapped to a tagged list and so base64. Note that XMLRPC date is mapped to Erlang date and the time zone value is ignored!</p>
+
+<pre>
+<![CDATA[
+       XMLRPC types              Erlang types
+       ------------              ------------
+       <boolean>          -----> true or false
+       <dateTime.iso8601> -----> date()
+       <double>           -----> float()
+       <int>, <i4>        -----> integer()
+       <string>           -----> string()
+       <array>            -----> {array, [Value]}
+       <base64>           -----> {base64, string()}
+       <struct>           -----> {struct, [{Key, Value}]}
+]]>
+</pre>
+
+<h3>Example of an XMLRPC server request 'GetServiceInfo'</h3>
+
+<pre>
+<![CDATA[
+POST / HTTP/1.1
+Content-Length: 618
+Content-Type: text/xml
+Date: Thu, 14-May-2011 17:04:13 MEST
+Host: 127.0.0.1:10010
+Connection: close
+User-Agent: Erlang XMLRPC/INETS
+
+<?xml version="1.0" encoding="UTF-8"?>
+<methodCall>
+<methodName>GetServiceInfo</methodName>
+<params>
+<param>
+<value>
+<struct>
+<member>
+<name>originNodeType</name>
+<value>node</value>
+</member>
+<member>
+<name>originHostName</name>
+<value>host</value>
+</member>
+<member>
+<name>originTransactionID</name>
+<value>12345</value>
+</member>
+<member>
+<name>originTimeStamp</name>
+<value>
+<dateTime.iso8601>20080102T01:02:02+0200</dateTime.iso8601>
+</value>
+</member>
+<member>
+<name>subscriberNumber</name>
+<value>8754496363</value>
+</member>
+</struct>
+</value>
+</param>
+</params>
+</methodCall>
+]]>
+</pre>
+
+<p>
+After xmlrpc decodes this request, the <u>Params</u> will look like the following:
+<pre>
+<tt>
+[{struct,[{originNodeType,"node"},
+          {originHostName,"host"},
+          {originTransactionID,"12345"},
+          {originTimeStamp,{{2008,1,2},{1,2,2}}},
+          {subscriberNumber,"8754496363"}]}]
+</tt>
+</pre>
+
+The response for this request looks like:
+<pre>
+<tt>
+[{struct,[{responseCode,0},
+          {originTransactionID,"566613"},                          
+          {serviceCurrent,5},
+          {serviceList,{array,[1,2,3,4]}}]}]
+</tt>
+</pre>
+</p>
+
+<p>
+If the request data is not valid, we can return one of the fault codes
+</p>
+
+<h3>Example of a fault response:</h3>
+
+<pre>
+<![CDATA[
+POST / HTTP/1.1
+Content-Length: 618
+Content-Type: text/xml
+Date: Thu, 14-May-2011 17:04:13 MEST
+Host: 127.0.0.1:10010
+Connection: close
+User-Agent: Erlang XMLRPC/INETS
+
+<?xml version="1.0"?>
+<methodResponse>
+<fault>
+<value>
+<struct>
+<member>
+<name>faultCode</name>
+<value><int>4</int></value>
+</member>
+<member>
+<name>faultString</name>
+<value><string>Too many parameters.</string></value>
+</member>
+</struct>
+</value>
+</fault>
+</methodResponse>
+]]>
+</pre>
+
+In Erlang terms, this response should look like
+<tt>
+<pre>
+{fault,[{faultCode, 4}, {faultString, "Too many parameters."}]}
+</pre>
+</tt>
+
+<h2><a name="usage">Usage</a></h2>
+
+<h3>Example server code</h3>
+<p>
+<tt>
+<pre>
+-module(xmlrpc_srv).
+
+
+%%------------------------------------------------------------------------------
+%% BEHAVIOUR
+%%------------------------------------------------------------------------------
+-behaviour(gen_xmlrpc).
+
+
+%%------------------------------------------------------------------------------
+%% INCLUDE
+%%------------------------------------------------------------------------------
+-include("gen_xmlrpc.hrl").
+
+
+%%------------------------------------------------------------------------------
+%% API
+%%------------------------------------------------------------------------------
+-export([start_link/3]).
+
+
+%%------------------------------------------------------------------------------
+%% gen_xmlrpc callbacks
+%%------------------------------------------------------------------------------
+-export([init/1, terminate/2,
+         handle_request/3, request_specs/2]).
+
+
+%%------------------------------------------------------------------------------
+%% RECORDS
+%%------------------------------------------------------------------------------
+-record(state, {}).
+
+
+%%%===================================================================
+%%% API
+%%%===================================================================
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Starts the server
+%%
+%% @spec start_link(Port, URI, Options) -> {ok, Pid} | {error, Error}
+%% @end
+%%--------------------------------------------------------------------
+start_link(Port, URI, Options) ->
+    gen_xmlrpc:start_link(?MODULE, [], [{port, Port}, {uri, URI} | Options]).
+
+
+%%%===================================================================
+%%% gen_xmlrpc callbacks
+%%%===================================================================
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Initializes the server
+%%
+%% @spec init(Args) -> {ok, State} |
+%%                     ignore |
+%%                     {stop, Reason}
+%% @end
+%%--------------------------------------------------------------------
+init([]) ->
+    {ok, #state{}}.
+
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% This function is called by a gen_xmlrpc when it is about to
+%% terminate. It should be the opposite of Module:init/1 and do any
+%% necessary cleaning up. When it returns, the gen_xmlrpc terminates
+%% with Reason. The return value is ignored.
+%%
+%% @spec terminate(Reason, State) -> void()
+%% @end
+%%--------------------------------------------------------------------
+terminate(_Reason, _State) ->
+    io:format("Terminating ...~n"),
+    ok.
+
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Handling XMLRPC messages
+%%
+%% @spec handle_request(MethodName, Params, State) ->
+%%                                   {reply, Reply, State} |
+%%                                   {stop, Reason, State}
+%% @end
+%%--------------------------------------------------------------------
+handle_request('GetServiceInfo', Params, State) ->
+    io:format("~p~n", [Params]),
+    Reply = [{struct,[{originTransactionID,"566613"},
+                      {responseCode,0},
+                      {serviceCurrent,5},
+                      {serviceList,{array,[1,2,3,4]}}]}],
+    {reply, Reply, State};
+handle_request(_,_,State) ->
+    Reply = {fault,[{faultCode, 4}, 
+                    {faultString, "Too many parameters."}]},
+    {reply, Reply, State}.
+
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Returns XMLRPC specification
+%%
+%% @spec request_specs(MethodName, State) -> Result
+%% @end
+%%--------------------------------------------------------------------
+request_specs('GetServiceInfo', _State) ->
+    [#param{value = 
+                #struct{members = 
+                            [#string{name = originNodeType},
+                             #string{name = originHostName},
+                             #string{name = originTransactionID},
+                             #string{name = subscriberNumber},
+                             #date{name = originTimeStamp}]}}];
+request_specs(_, _) ->
+    [].
+
+
+%%%===================================================================
+%%% Internal functions
+%%%===================================================================
+</pre>
+</tt>
+</p>
+
+<p>
+
+The <u>handle_request/3</u> callback should implement the XMLRPC call method and return the <u>reply</u> (i.e response) with the new server <u>State</u>. The <u>request_specs/2</u> callback generates the specifications of the XMLRPC call method to be validated by the XMLRPC decoder. The specifications can be a deep list of records describing the rule of the element whether it is mandatory or optional and its data type.
+
+<p>For example, to validate the previous response, the specifications can look like the following:</p>
+
+<tt>
+<pre>
+<![CDATA[
+<methodResponse>
+<params>
+<param>
+<value>
+<struct>
+<member>
+<name>serviceList</name>
+<value>
+<array>
+<data>
+<value><int>1</int></value>
+<value><int>2</int></value>
+<value><int>3</int></value>
+<value><int>4</int></value>
+</data>
+</array>
+</value>
+</member>
+<member>
+<name>serviceCurrent</name>
+<value><int>5</int></value>
+</member>
+<member>
+<name>responseCode</name>
+<value>
+<int>0</int>
+</value>
+</member>
+<member>
+<name>originTransactionID</name>
+<value>
+<string>566613</string>
+</value>
+</member>
+</struct>
+</value>
+</param>
+</params>
+</methodResponse>
+]]>
+
+[#param{value = 
+         #struct{members = 
+                  [#int{name = serviceCurrent},
+                   #int{name = responseCode},
+                   #string{name = originTransactionID},
+                   #array{name = serviceList, value = #int{name = serviceList}}]}}]
+</pre>
+</tt>
+
+Since array values don't have a name, its preferable to name it with the array name so that the error would be meaningful if it is not found.
+
+<pre>
+{error,{wrong_type,#int{name = serviceList,
+                        rule = mandatory}}}
+
+</pre>
+
+Default rule is mandatory if not specified otherwise. 
+</p>
+
+
+<h4>Client API</h4>
+<p>
+
+gen_xmlrpc also provides client API <u>call/4</u> to send XMLRPC requests to remote servers. For example, to generate the above request:
+
+<pre>
+Req = {'GetServiceInfo',[{struct,[{originNodeType,"node"},
+                                  {originHostName,"host"},
+                                  {originTransactionID,"12345"},
+                                  {originTimeStamp,{{2008,1,2},{1,2,2}}},
+                                  {subscriberNumber,"8754496363"}]}]}
+
+gen_xmlrpc:call({127,0,0,1}, 8080, "/", Req, []).
+
+[{struct,[{originTransactionID,"566613"},
+          {responseCode,0},
+          {serviceCurrent,5},
+          {serviceList,{array,[1,2,3,4]}}]}]
+</pre>
+</p>
+
+<h3><a name="config">Configuration</a></h3>
+<dl>
+     <dt>{port, integer()} :</dt>
+       <dd>The port that the HTTP server shall listen on. If zero is specified as port, 
+         an arbitrary available port will be picked and you  can  use  the 
+         httpd:info/2 function to find out which port was picked.</dd>
+
+     <dt>{max_clients, integer()} : </dt>
+       <dd>Limits the number of simultaneous requests that can be supported. Defaults to 150.</dd>
+
+     <dt>{users, [string()]} :</dt>
+       <dd>Defines users which should be granted access to a given directory using a secret password.</dd>
+</dl>
+
+<h2><a name="install">Installation</a></h2>
+
+<p></p>
+
+
+<h2><a name="todo">TODO</a></h2>
+
+<ul>Provide logging with <u>mod_log</u></ul>
+
+<h2><a name="contrib">Contributors</a></h2>
+
+<ul>
+XMLRPC library is inspired by 'Joakim Grebeno' Erlang XMLRPC library with extended behaviour
+</ul>
+
